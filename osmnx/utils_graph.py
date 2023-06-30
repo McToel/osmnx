@@ -261,7 +261,7 @@ def remove_isolated_nodes(G):
         graph with all isolated nodes removed
     """
     # make a copy to not mutate original graph object caller passed in
-    G = G.copy()
+    # G = G.copy()
 
     # get the set of all isolated nodes, then remove them
     isolated_nodes = {node for node, degree in G.degree() if degree < 1}

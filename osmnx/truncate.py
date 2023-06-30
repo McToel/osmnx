@@ -164,6 +164,8 @@ def truncate_graph_polygon(
     gs_nodes_outside_poly = gs_nodes[~gs_nodes.index.isin(to_keep)]
     nodes_outside_poly = set(gs_nodes_outside_poly.index)
 
+    del gs_nodes, to_keep, gs_nodes_outside_poly
+
     if truncate_by_edge:
         # retain nodes outside boundary polygon if at least one of node's
         # neighbors is within the polygon
@@ -179,7 +181,7 @@ def truncate_graph_polygon(
 
     # now remove from the graph all those nodes that lie outside the polygon
     # make a copy to not mutate original graph object caller passed in
-    G = G.copy()
+    # G = G.copy()
     G.remove_nodes_from(nodes_to_remove)
     utils.log(f"Removed {len(nodes_to_remove)} nodes outside polygon")
 

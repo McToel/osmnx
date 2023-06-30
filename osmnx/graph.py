@@ -22,6 +22,9 @@ from . import utils_graph
 from ._errors import EmptyOverpassResponse
 from ._version import __version__
 
+import linecache
+import os
+import tracemalloc
 
 def graph_from_bbox(
     north,
@@ -372,6 +375,42 @@ def graph_from_place(
     return G
 
 
+def display_top(snapshot, key_type='lineno', limit=10):
+    snapshot = snapshot.filter_traces((
+        tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
+        tracemalloc.Filter(False, "<unknown>"),
+    ))
+    top_stats = snapshot.statistics(key_type)
+
+    print("Top %s lines" % limit)
+    for index, stat in enumerate(top_stats[:limit], 1):
+        frame = stat.traceback[0]
+        print("#%s: %s:%s: %.1f KiB"
+              % (index, frame.filename, frame.lineno, stat.size / 1024))
+        line = linecache.getline(frame.filename, frame.lineno).strip()
+        if line:
+            print('    %s' % line)
+
+    other = top_stats[limit:]
+    if other:
+        size = sum(stat.size for stat in other)
+        print("%s other: %.1f KiB" % (len(other), size / 1024))
+    total = sum(stat.size for stat in top_stats)
+    print("Total allocated size: %.1f KiB" % (total / 1024))
+
+
+def trace_memory(title):
+    snapshot = tracemalloc.take_snapshot()
+
+    print('\n-----------------------------------')
+    print(title)
+    print('-' * len(title))
+    display_top(snapshot)
+    print('-----------------------------------\n')
+
+    return snapshot
+
+
 def graph_from_polygon(
     polygon,
     network_type="all_private",
@@ -441,35 +480,46 @@ def graph_from_polygon(
         poly_proj_buff = poly_proj.buffer(buffer_dist)
         poly_buff, _ = projection.project_geometry(poly_proj_buff, crs=crs_utm, to_latlong=True)
 
+
         # download the network data from OSM within buffered polygon
         response_jsons = _downloader._osm_network_download(poly_buff, network_type, custom_filter)
 
+        trace_memory('pre download')
+
         # create buffered graph from the downloaded data
         bidirectional = network_type in settings.bidirectional_network_types
-        G_buff = _create_graph(response_jsons, retain_all=True, bidirectional=bidirectional)
+        G = _create_graph(response_jsons, retain_all=True, bidirectional=bidirectional)
+
+        trace_memory('after download')
 
         # truncate buffered graph to the buffered polygon and retain_all for
         # now. needed because overpass returns entire ways that also include
         # nodes outside the poly if the way (that is, a way with a single OSM
         # ID) has a node inside the poly at some point.
-        G_buff = truncate.truncate_graph_polygon(G_buff, poly_buff, True, truncate_by_edge)
+        G = truncate.truncate_graph_polygon(G, poly_buff, True, truncate_by_edge)
+
+        trace_memory('after first truncate')
 
         # simplify the graph topology
         if simplify:
-            G_buff = simplification.simplify_graph(G_buff)
+            G = simplification.simplify_graph(G)
+
+        # count how many physical streets in buffered graph connect to each
+        # intersection in un-buffered graph, to retain true counts for each
+        # intersection, even if some of its neighbors are outside the polygon
+        spn = stats.count_streets_per_node(G)
+        nx.set_node_attributes(G, values=spn, name="street_count")
+
+        trace_memory('after count streets')
 
         # truncate graph by original polygon to return graph within polygon
         # caller wants. don't simplify again: this allows us to retain
         # intersections along the street that may now only connect 2 street
         # segments in the network, but in reality also connect to an
         # intersection just outside the polygon
-        G = truncate.truncate_graph_polygon(G_buff, polygon, retain_all, truncate_by_edge)
+        G = truncate.truncate_graph_polygon(G, polygon, retain_all, truncate_by_edge)
 
-        # count how many physical streets in buffered graph connect to each
-        # intersection in un-buffered graph, to retain true counts for each
-        # intersection, even if some of its neighbors are outside the polygon
-        spn = stats.count_streets_per_node(G_buff, nodes=G.nodes)
-        nx.set_node_attributes(G, values=spn, name="street_count")
+        trace_memory('after second truncate')
 
     # if clean_periphery=False, just use the polygon as provided
     else:
